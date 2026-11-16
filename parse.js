@@ -22,6 +22,13 @@ function whitespace(c){
   if(!c)return true;
   const n=c.charCodeAt(0);return n<128?n===32||n>=9&&n<=13:/\s/u.test(c);
 }
+function emphasisFlags(ch,before,after){
+  const beforeSpace=whitespace(before),afterSpace=whitespace(after);
+  const beforePunct=punctuation(before),afterPunct=punctuation(after);
+  const left=!afterSpace&&(!afterPunct||beforeSpace||beforePunct);
+  const right=!beforeSpace&&(!beforePunct||afterSpace||afterPunct);
+  return {open:ch==='_'?left&&(!right||beforePunct):left,close:ch==='_'?right&&(!left||afterPunct):right};
+}
 const listBoundaries=Array.from({length:4},(_,i)=>new RegExp('^ {0,'+i+'}(?:[*+-]|\\d{1,9}[.)])(?=[ \\t]|$)'));
 export function escape(html, encode) {
   if (encode) {
@@ -485,14 +492,8 @@ class Lexer {
   }
   matchEmStrong(src,count,original,masked=original){
     const ch=src[0], offset=original.length-src.length;
-    const punct=punctuation, ws=whitespace;
-    const flags=(before,after)=>{
-      const left=!ws(after)&&(!punct(after)||ws(before)||punct(before));
-      const right=!ws(before)&&(!punct(before)||ws(after)||punct(after));
-      return {open:ch==='_'?left&&(!right||punct(before)):left,close:ch==='_'?right&&(!left||punct(after)):right};
-    };
     let begin=offset;while(begin>0&&original[begin-1]===ch)begin--;
-    const before=precedingChar(original,begin), first=flags(before,src[count]);
+    const before=precedingChar(original,begin), first=emphasisFlags(ch,before,src[count]);
     if(!first.open) return;
     let balance=count, skipped=0;
     for(let i=count;i<src.length;){
@@ -506,7 +507,7 @@ class Lexer {
       if(src[i]==='`'){const code=/^(`+)([^`]|[^`][\s\S]*?[^`])\1(?!`)/.exec(src.slice(i));if(code){i+=code[0].length;continue;}}
       if(src[i]!==ch){i++;continue;}
       let end=i;while(src[end]===ch)end++;
-      const n=end-i, f=flags(precedingChar(src,i),src[end]);
+      const n=end-i, f=emphasisFlags(ch,precedingChar(src,i),src[end]);
       if(f.open&&!f.close){balance+=n;i=end;continue;}
       if(f.close){
         if((first.close||f.open)&&(count+n)%3===0&&(count%3!==0||n%3!==0)){skipped+=n;i=end;continue;}
@@ -552,7 +553,7 @@ class Parser {
       case 'heading': return `<h${t.depth}>${this.inline(t.tokens)}</h${t.depth}>\n`;
       case 'code': { const text=t.text?t.text.replace(/\n$/,'')+'\n':''; return '<pre><code'+(t.lang?' class="language-'+escape(t.lang.split(/\s+/)[0])+'"':'')+'>'+escape(text,true)+'</code></pre>\n'; }
       case 'blockquote': return '<blockquote>\n'+this.parse(t.tokens)+'</blockquote>\n';
-      case 'html': return t.text + (t.text.endsWith('\n')?'':'');
+      case 'html': return t.text;
       case 'def': return '';
       case 'paragraph': return '<p>'+this.inline(t.tokens)+'</p>\n';
       case 'text': return t.tokens ? this.inline(t.tokens) : escape(t.text);
