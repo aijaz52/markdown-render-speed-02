@@ -254,15 +254,17 @@ class Lexer {
       while(rest && !done){
         const nl = rest.indexOf('\n'); const line = nl===-1?rest:rest.slice(0,nl); const seg = nl===-1?rest:rest.slice(0,nl+1);
         let lead=0;while(line.charCodeAt(lead)===32)lead++;
-        const expanded=line.charCodeAt(lead)===9?line.replace(/^[ \t]+/,s=>expandTabs(s)):line;
         // blank line
-        if(/^[ \t]*$/.test(line)){
+        let blankEnd=lead;
+        while(line.charCodeAt(blankEnd)===9||line.charCodeAt(blankEnd)===32)blankEnd++;
+        if(blankEnd===line.length){
           if(!itemText.trim()){itemRaw+=seg;rest=rest.slice(seg.length);break;}
           itemText += '\n';
           previous='';
           itemRaw += seg; rest = nl===-1?'':rest.slice(nl+1);
           continue;
         }
+        const expanded=line.charCodeAt(lead)===9?line.replace(/^[ \t]+/,s=>expandTabs(s)):line;
         // end conditions
         if(boundary.test(line)) break;
         if(expanded!==line){lead=0;while(expanded.charCodeAt(lead)===32)lead++;}
@@ -445,6 +447,9 @@ class Lexer {
           else tokens.push({type:'text',raw,text:raw});
           src=src.slice(run);continue;
         }
+        let begin=original.length-src.length;while(begin>0&&original[begin-1]===src[0])begin--;
+        const first=emphasisFlags(src[0],precedingChar(original,begin),after);
+        if(first&1){
         if(masked===undefined){
           if(!/[`\\[<]/.test(original))masked=original;
           else {
@@ -452,7 +457,8 @@ class Lexer {
           masked=/[`[<]/.test(prepared)?prepared.replace(/\[(?:[^\[\]`]|(?<a>`+)[^`]+\k<a>(?!`))*?\]\((?:\\[\s\S]|[^\\()]|\((?:\\[\s\S]|[^\\()])*\))*\)|(?<!`)(?<b>`+)[^`]+\k<b>(?!`)|<(?! )[^<>]*?>/g,m=>'['+'a'.repeat(m.length-2)+']'):prepared;
           }
         }
-        if((m=this.matchEmStrong(src,run,original,masked))){ tokens.push(m); src=src.slice(m.raw.length); continue; }
+        if((m=this.matchEmStrong(src,run,original,masked,first))){ tokens.push(m); src=src.slice(m.raw.length); continue; }
+        }
       }
       // codespan
       if(ch===96 && (m=inlineCodePattern.exec(src))){ let text=m[2].replace(/\n/g,' '); const ns=/[^ ]/.test(text), sb=text.charCodeAt(0)===32&&text.charCodeAt(text.length-1)===32; if(ns&&sb) text=text.substring(1,text.length-1); tokens.push({type:'codespan',raw:m[0],text}); src=src.slice(m[0].length); continue; }
@@ -523,11 +529,8 @@ class Lexer {
       i=end-1;
     }
   }
-  matchEmStrong(src,count,original,masked=original){
+  matchEmStrong(src,count,original,masked,first){
     const ch=src[0], offset=original.length-src.length;
-    let begin=offset;while(begin>0&&original[begin-1]===ch)begin--;
-    const before=precedingChar(original,begin), first=emphasisFlags(ch,before,src[count]);
-    if(!(first&1)) return;
     let balance=count, skipped=0;
     for(let i=count;i<src.length;){
       emphasisBoundary.lastIndex=i;
