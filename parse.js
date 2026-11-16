@@ -4,6 +4,7 @@
 const escapeTable=[];
 escapeTable[38]='&amp;';escapeTable[60]='&lt;';escapeTable[62]='&gt;';escapeTable[34]='&quot;';escapeTable[39]='&#39;';
 const entityPattern=/&(?:#\d{1,7}|#[Xx][a-fA-F0-9]{1,6}|\w+);/y;
+const escapeTest=/[&<>"']/;
 const textBoundary = /[\\<!\[`*_~]|https?:\/\/|ftp:\/\/|www\.|(?:mailto:|xmpp:)?[A-Za-z0-9._+-]+@| {2,}\n/gi;
 const textBoundaryNoEmail = /[\\<!\[`*_~]|https?:\/\/|ftp:\/\/|www\.| {2,}\n/gi;
 const listItemPatterns=Object.create(null);
@@ -28,6 +29,7 @@ function emphasisFlags(ch,before,after){
 }
 const listBoundaries=Array.from({length:4},(_,i)=>new RegExp('^ {0,'+i+'}(?:[*+-]|\\d{1,9}[.)])(?=[ \\t]|$)'));
 export function escape(html, encode) {
+  if(!escapeTest.test(html))return html;
   let out='',start=0;
   for(let i=0;i<html.length;i++){
     const ch=html.charCodeAt(i);
@@ -150,7 +152,23 @@ class Lexer {
   lex(src) {
     this.tokens = []; this.tokens.links = Object.create(null); this.inlineQueue = [];
     this.state.top = true; this.blockTokens(src, this.tokens, true);
-    for (let i=0;i<this.inlineQueue.length;i++){ const q=this.inlineQueue[i]; this.state.inRawBlock=false; this.inlineTokens(q.src,q.tokens); }
+    // References are complete now. Reuse inline fragments only within this document,
+    // including all state that can affect inline tokenization in the cache key.
+    const inlineCache=new Array(4);
+    for (let i=0;i<this.inlineQueue.length;i++){
+      const q=this.inlineQueue[i];this.state.inRawBlock=false;
+      if(q.tokens.length||q.src.length<16){this.inlineTokens(q.src,q.tokens);continue;}
+      const key=(this.state.inLink?1:0)|(this.state.linkEmitted?2:0);
+      const cache=inlineCache[key]||(inlineCache[key]=new Map());
+      const hit=cache.get(q.src);
+      if(hit){
+        for(let j=0;j<hit.tokens.length;j++)q.tokens.push(hit.tokens[j]);
+        this.state.inLink=hit.inLink;this.state.inRawBlock=hit.inRawBlock;this.state.linkEmitted=hit.linkEmitted;
+      }else{
+        this.inlineTokens(q.src,q.tokens);
+        cache.set(q.src,{tokens:q.tokens,inLink:this.state.inLink,inRawBlock:this.state.inRawBlock,linkEmitted:this.state.linkEmitted});
+      }
+    }
     this.inlineQueue=[]; return this.tokens;
   }
   blockTokens(src,tokens,top=true){
@@ -266,7 +284,13 @@ class Lexer {
     items[items.length-1].raw=items[items.length-1].raw.trimEnd();
     // loose detection
     let loose=false;
-    for(let k=0;k<items.length-1;k++){ if(/\n[ \t]*\n[ \t]*$/.test(items[k].raw)) {loose=true; break;} }
+    for(let k=0;k<items.length-1;k++){
+      const raw=items[k].raw;let end=raw.length-1;
+      while(raw.charCodeAt(end)===32||raw.charCodeAt(end)===9)end--;
+      if(raw.charCodeAt(end--)!==10)continue;
+      while(raw.charCodeAt(end)===32||raw.charCodeAt(end)===9)end--;
+      if(raw.charCodeAt(end)===10){loose=true;break;}
+    }
     const listTok={type:'list',raw:trimEndChar(src.slice(0,src.length-rest.length),'\n'),ordered:isOrdered,start:isOrdered?+bull.slice(0,-1):'',loose,items};
     // tokenize
     const prevTop=this.state.top;
@@ -578,7 +602,7 @@ class Parser {
     return `<table>\n<thead>\n${head}</thead>\n${body}</table>\n`;
   }
   cell(c){ const tag=c.header?'th':'td'; const al=c.align?` align="${c.align}"`:''; return `<${tag}${al}>${this.inline(c.tokens)}</${tag}>\n`; }
-  inline(tokens){ let out=''; for(const t of tokens) out+=this.itok(t); return out; }
+  inline(tokens){ let out=''; for(const t of tokens)out+=this.itok(t); return out; }
   plain(tokens){let out='';for(const t of tokens)out+=t.tokens?this.plain(t.tokens):t.type==='br'?'':t.text||'';return out;}
   itok(t){
     switch(t.type){
