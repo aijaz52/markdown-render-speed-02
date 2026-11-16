@@ -154,8 +154,8 @@ class Lexer {
       let token;
       let lead=0;while(lead<3&&src.charCodeAt(lead)===32)lead++;
       const ch=src.charCodeAt(lead);
-      if((token=this.tokenSpace(src))){ src=src.slice(token.raw.length); const last=tokens[tokens.length-1]; if(token.raw.length===1 && last!==undefined && !last.raw.endsWith('\n')) last.raw+='\n'; else tokens.push(token); continue; }
-      if((token=this.tokenCode(src,tokens))){ src=src.slice(token.raw.length); const last=tokens[tokens.length-1]; if(last&&(last.type==='paragraph'||last.type==='text')){ last.raw+=(last.raw.endsWith('\n')?'':'\n')+token.raw; last.text+='\n'+token.text; this.inlineQueue[this.inlineQueue.length-1].src=last.text; } else tokens.push(token); continue; }
+      if((lead>0||ch===9||ch===10)&&(token=this.tokenSpace(src))){ src=src.slice(token.raw.length); const last=tokens[tokens.length-1]; if(token.raw.length===1 && last!==undefined && !last.raw.endsWith('\n')) last.raw+='\n'; else tokens.push(token); continue; }
+      if((lead>0||ch===9)&&(token=this.tokenCode(src))){ src=src.slice(token.raw.length); const last=tokens[tokens.length-1]; if(last&&(last.type==='paragraph'||last.type==='text')){ last.raw+=(last.raw.endsWith('\n')?'':'\n')+token.raw; last.text+='\n'+token.text; this.inlineQueue[this.inlineQueue.length-1].src=last.text; } else tokens.push(token); continue; }
       if((ch===96||ch===126)&&(token=this.tokenFences(src))){ src=src.slice(token.raw.length); tokens.push(token); continue; }
       if(ch===35&&(token=this.tokenHeading(src))){ src=src.slice(token.raw.length); tokens.push(token); continue; }
       if((ch===45||ch===95||ch===42)&&(token=this.tokenHr(src))){ src=src.slice(token.raw.length); tokens.push(token); continue; }
@@ -206,10 +206,10 @@ class Lexer {
     if(!start) return; if(/^ {0,3}((?:-[\t ]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})(?:\n+|$)/.test(src)) return;
     const bull = start[1].trim(); const isOrdered = bull.length>1; const bullStr = isOrdered ? `\\d{1,9}\\${bull.slice(-1)}` : `\\${bull}`;
     const itemRe = listItemPatterns[bullStr];
-    let raw=''; let rest=src; const items=[];
+    let rest=src; const items=[];
     while(rest){
       const m=itemRe.exec(rest); if(!m) break; if(/^ {0,3}((?:-[\t ]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})(?:\n+|$)/.test(rest)) break;
-      let itemRaw = m[0]; raw += itemRaw; rest = rest.slice(itemRaw.length);
+      let itemRaw = m[0]; rest = rest.slice(itemRaw.length);
       let content = m[2].replace(/\n$/, '').replace(/^[ \t]+/, s=>expandTabs(s,m[1].length));
       // compute indent
       let indent = m[1].length; let space = 0; let textContent='';
@@ -226,16 +226,16 @@ class Lexer {
         const expanded=line.charCodeAt(lead)===9?line.replace(/^[ \t]+/,s=>expandTabs(s)):line;
         // blank line
         if(/^[ \t]*$/.test(line)){
-          if(!itemText.trim()){itemRaw+=seg;raw+=seg;rest=rest.slice(seg.length);break;}
+          if(!itemText.trim()){itemRaw+=seg;rest=rest.slice(seg.length);break;}
           itemText += '\n';
           previous='';
-          itemRaw += seg; raw += seg; rest = nl===-1?'':rest.slice(nl+1);
+          itemRaw += seg; rest = nl===-1?'':rest.slice(nl+1);
           continue;
         }
         // end conditions
         if(boundary.test(line)) break;
         if(expanded!==line){lead=0;while(expanded.charCodeAt(lead)===32)lead++;}
-        if(lead>=indent){itemText+='\n'+expanded.slice(indent);previous=expanded.slice(indent);itemRaw+=seg;raw+=seg;rest=rest.slice(seg.length);continue;}
+        if(lead>=indent){previous=expanded.slice(indent);itemText+='\n'+previous;itemRaw+=seg;rest=rest.slice(seg.length);continue;}
         if(/^ {0,3}((?:-[\t ]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})(?:\n+|$)/.test(rest)) break;
         if(/^ {0,3}#{1,6}(?:\s|$)/.test(line)) break;
         if(/^ {0,3}>/.test(line)) break;
@@ -243,10 +243,10 @@ class Lexer {
         if(/^ {0,3}<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?:[ \t]+|$|\/?>)/i.test(line)) break;
         // indented continuation
         let w=0, j=0; while(j<line.length){ if(line[j]==='\t'){w += 4-(w%4); j++;} else if(line[j]===' '){w++; j++;} else break; if(w>=indent) break; }
-        if(w>=indent){ itemText += '\n' + expanded.slice(indent); itemRaw += seg; raw += seg; rest = nl===-1?'':rest.slice(nl+1); continue; }
+        if(w>=indent){ itemText += '\n' + expanded.slice(indent); itemRaw += seg; rest = nl===-1?'':rest.slice(nl+1); continue; }
         // lazy
         if(!previous.trim() || /^ {4}|^ {0,3}(?:`{3,}(?=[^`\n]*(?:\n|$))|~{3,}|#{1,6}(?:\s|$)|<(?:script|pre|style|textarea|!--|\?|![A-Z]|!\[CDATA\[|\/?(?:div|p|table|ul|ol|li|blockquote)(?:[\s/>]|$)))/i.test(previous)) break;
-        itemText += '\n' + line; previous=expanded.slice(indent); itemRaw += seg; raw += seg; rest = nl===-1?'':rest.slice(nl+1);
+        itemText += '\n' + line; previous=expanded.slice(indent); itemRaw += seg; rest = nl===-1?'':rest.slice(nl+1);
       }
       // task
       let task=false, checked=false, ttext=itemText;
@@ -260,7 +260,7 @@ class Lexer {
     // loose detection
     let loose=false;
     for(let k=0;k<items.length-1;k++){ if(/\n[ \t]*\n[ \t]*$/.test(items[k].raw)) {loose=true; break;} }
-    const listTok={type:'list',raw:trimEndChar(raw,'\n'),ordered:isOrdered,start:isOrdered?+bull.slice(0,-1):'',loose,items};
+    const listTok={type:'list',raw:trimEndChar(src.slice(0,src.length-rest.length),'\n'),ordered:isOrdered,start:isOrdered?+bull.slice(0,-1):'',loose,items};
     // tokenize
     const prevTop=this.state.top;
     for(const it of items){
@@ -284,8 +284,6 @@ class Lexer {
     }
     if(listTok.loose){ for(const it of items){ it.loose=true; for(const t of it.tokens) if(t.type==='text') t.type='paragraph'; if(it.tokens[0]?.type==='checkbox'&&it.tokens[1]?.type==='paragraph'){const cb=it.tokens.shift();it.tokens[0].tokens.unshift(cb);} } }
     this.state.top=prevTop;
-    // fix raw to match marked? marked sets i.raw=n.slice(0,s()).trimEnd() sometimes; we approx
-    if(!listTok.raw.endsWith('\n') && src.slice(listTok.raw.length, listTok.raw.length+1)==='\n'){}
     return listTok;
   }
   tokenHtml(src){ const m=htmlBlock.exec(src); if(m){ let raw=ge(m[0]);if(/^ {0,3}<!--/.test(raw)&&raw.includes('-->')){const end=src.indexOf('\n',raw.indexOf('-->')+3);raw=ge(src.slice(0,end<0?src.length:end+1)+(src[end+1]==='\n'?'\n':''));} return {type:'html',block:true,raw,pre:m[1]==='pre'||m[1]==='script'||m[1]==='style',text:raw}; } }
@@ -361,9 +359,16 @@ class Lexer {
     const hasEmail=src.includes('@');
     const boundary=hasEmail?textBoundary:textBoundaryNoEmail;
     boundary.lastIndex=0;
-    if(!boundary.test(src)){
+    const firstBoundary=boundary.exec(src);
+    if(!firstBoundary){
       if(src){const last=tokens[tokens.length-1];if(last&&last.type==='text'){last.raw+=src;last.text+=src;}else tokens.push({type:'text',raw:src,text:src});}
       return tokens;
+    }
+    if(firstBoundary.index){
+      const raw=src.slice(0,firstBoundary.index),last=tokens[tokens.length-1];
+      if(last&&last.type==='text'){last.raw+=raw;last.text+=raw;}
+      else tokens.push({type:'text',raw,text:raw});
+      src=src.slice(firstBoundary.index);
     }
     let masked;
     while(src){
@@ -407,7 +412,7 @@ class Lexer {
           masked=/[`[<]/.test(prepared)?prepared.replace(/\[(?:[^\[\]`]|(?<a>`+)[^`]+\k<a>(?!`))*?\]\((?:\\[\s\S]|[^\\()]|\((?:\\[\s\S]|[^\\()])*\))*\)|(?<!`)(?<b>`+)[^`]+\k<b>(?!`)|<(?! )[^<>]*?>/g,m=>'['+'a'.repeat(m.length-2)+']'):prepared;
           }
         }
-        if((m=this.matchEmStrong(src,tokens,original,masked))){ tokens.push(m); src=src.slice(m.raw.length); continue; }
+        if((m=this.matchEmStrong(src,run,original,masked))){ tokens.push(m); src=src.slice(m.raw.length); continue; }
       }
       // codespan
       if(ch===96 && (m=/^(`+)([^`]|[^`][\s\S]*?[^`])\1(?!`)/.exec(src))){ let text=m[2].replace(/\n/g,' '); const ns=/[^ ]/.test(text), sb=/^ /.test(text)&&/ $/.test(text); if(ns&&sb) text=text.substring(1,text.length-1); tokens.push({type:'codespan',raw:m[0],text}); src=src.slice(m[0].length); continue; }
@@ -478,9 +483,8 @@ class Lexer {
       i=end-1;
     }
   }
-  matchEmStrong(src,tokens,original,masked=original){
-    const open=/^(\*+|_+)/.exec(src); if(!open) return;
-    const ch=src[0], count=open[0].length, offset=original.length-src.length;
+  matchEmStrong(src,count,original,masked=original){
+    const ch=src[0], offset=original.length-src.length;
     const punct=punctuation, ws=whitespace;
     const flags=(before,after)=>{
       const left=!ws(after)&&(!punct(after)||ws(before)||punct(before));
