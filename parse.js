@@ -1,12 +1,9 @@
 
 'use strict';
 
-const escapeTest = /[&<>"']/;
-const escapeReplace = /[&<>"']/g;
-const escapeTestNoEncode = /[<>"']|&(?!(#\d{1,7}|#[Xx][a-fA-F0-9]{1,6}|\w+);)/;
-const escapeReplaceNoEncode = /[<>"']|&(?!(#\d{1,7}|#[Xx][a-fA-F0-9]{1,6}|\w+);)/g;
-const esc = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
-const escFn = c => esc[c];
+const escapeTable=[];
+escapeTable[38]='&amp;';escapeTable[60]='&lt;';escapeTable[62]='&gt;';escapeTable[34]='&quot;';escapeTable[39]='&#39;';
+const entityPattern=/&(?:#\d{1,7}|#[Xx][a-fA-F0-9]{1,6}|\w+);/y;
 const textBoundary = /[\\<!\[`*_~]|https?:\/\/|ftp:\/\/|www\.|(?:mailto:|xmpp:)?[A-Za-z0-9._+-]+@| {2,}\n/gi;
 const textBoundaryNoEmail = /[\\<!\[`*_~]|https?:\/\/|ftp:\/\/|www\.| {2,}\n/gi;
 const listItemPatterns=Object.create(null);
@@ -31,12 +28,15 @@ function emphasisFlags(ch,before,after){
 }
 const listBoundaries=Array.from({length:4},(_,i)=>new RegExp('^ {0,'+i+'}(?:[*+-]|\\d{1,9}[.)])(?=[ \\t]|$)'));
 export function escape(html, encode) {
-  if (encode) {
-    if (escapeTest.test(html)) return html.replace(escapeReplace, escFn);
-  } else {
-    if (escapeTestNoEncode.test(html)) return html.replace(escapeReplaceNoEncode, escFn);
+  let out='',start=0;
+  for(let i=0;i<html.length;i++){
+    const ch=html.charCodeAt(i);
+    if(ch>62)continue;
+    const replacement=escapeTable[ch];if(replacement===undefined)continue;
+    if(ch===38&&!encode){entityPattern.lastIndex=i;if(entityPattern.test(html)){i=entityPattern.lastIndex-1;continue;}}
+    out+=html.slice(start,i)+replacement;start=i+1;
   }
-  return html;
+  return start?out+html.slice(start):html;
 }
 function cleanUrl(href) { try { return encodeURI(href).replace(/%25/g, '%'); } catch { return null; } }
 function trimEndChar(s, ch) { let i = s.length; while (i > 0 && s[i-1] === ch) i--; return s.slice(0,i); }
@@ -210,12 +210,12 @@ class Lexer {
   }
   tokenList(src){
     const start = /^( {0,3}(?:[*+-]|\d{1,9}[.)]))([ \t][^\n]*|[ \t]*)(?:\n|$)/.exec(src);
-    if(!start) return; if(/^ {0,3}((?:-[\t ]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})(?:\n+|$)/.test(src)) return;
+    if(!start) return; if(block.hr.test(src)) return;
     const bull = start[1].trim(); const isOrdered = bull.length>1; const bullStr = isOrdered ? `\\d{1,9}\\${bull.slice(-1)}` : `\\${bull}`;
     const itemRe = listItemPatterns[bullStr];
     let rest=src; const items=[];
     while(rest){
-      const m=itemRe.exec(rest); if(!m) break; if(/^ {0,3}((?:-[\t ]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})(?:\n+|$)/.test(rest)) break;
+      const m=itemRe.exec(rest); if(!m) break; if(block.hr.test(rest)) break;
       let itemRaw = m[0]; rest = rest.slice(itemRaw.length);
       let content = m[2].replace(/\n$/, '').replace(/^[ \t]+/, s=>expandTabs(s,m[1].length));
       // compute indent
@@ -243,7 +243,7 @@ class Lexer {
         if(boundary.test(line)) break;
         if(expanded!==line){lead=0;while(expanded.charCodeAt(lead)===32)lead++;}
         if(lead>=indent){previous=expanded.slice(indent);itemText+='\n'+previous;itemRaw+=seg;rest=rest.slice(seg.length);continue;}
-        if(/^ {0,3}((?:-[\t ]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})(?:\n+|$)/.test(rest)) break;
+        if(block.hr.test(rest)) break;
         if(/^ {0,3}#{1,6}(?:\s|$)/.test(line)) break;
         if(/^ {0,3}>/.test(line)) break;
         if(/^ {0,3}(?:`{3,}|~{3,})/.test(line)) break;
@@ -337,6 +337,8 @@ class Lexer {
     let pos=0,out='',first=true;
     while(pos<src.length){
       const nl=src.indexOf('\n',pos); const line=nl===-1?src.slice(pos):src.slice(pos,nl); const end=nl===-1?src.length:nl+1;
+      const initial=line.charCodeAt(0);
+      if(initial>=65&&initial<=90||initial>=97&&initial<=122){out+=src.slice(pos,end);pos=end;first=false;continue;}
       if(!first){
         if(/^[ \t]*$/.test(line)&&!(nl===-1&&line.length)) break;
         if(/^ {0,3}((?:-[\t ]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})[ \t]*$/.test(line)) break;
@@ -454,7 +456,7 @@ class Lexer {
     // skip leading spaces/newlines
     while(i<src.length && (src[i]===' '||src[i]==='\t'||src[i]==='\n')) i++;
     if(i<src.length && src[i]==='<'){
-      i++; while(i<src.length && src[i]!=='>'){ if(src[i]==='\n'||src[i]==='<')return null; if(src[i]==='\\'){ href+=src[i]+(src[i+1]||''); i+=2; } else { href+=src[i]; i++; } } if(i>=src.length) return null; i++;
+      const hrefStart=++i; while(i<src.length && src[i]!=='>'){ if(src[i]==='\n'||src[i]==='<')return null; i+=src[i]==='\\'?2:1; } if(i>=src.length) return null; href=src.slice(hrefStart,i); i++;
     } else {
       // read until whitespace or ) handling parens
       const hrefStart=i;let pd=0; while(i<src.length){ const c=src[i]; if(c==='\\'){ i+=2; continue; } if((c===' '||c==='\t'||c==='\n') && pd===0) break; if(c==='(') { pd++; i++; continue; } if(c===')'){ if(pd===0) break; pd--; i++; continue; } i++; }href=src.slice(hrefStart,i);
@@ -462,7 +464,7 @@ class Lexer {
     // title
     while(i<src.length && (src[i]===' '||src[i]==='\t'||src[i]==='\n')) i++;
     if(i<src.length && src[i]!==')'){
-      const q=src[i]; if(q==='"'||q==="'"||q==='('){ const end=q==='('?')':q; i++; let t=''; while(i<src.length && src[i]!==end){ if(src[i]==='\\'){ t+=src.slice(i,i+2); i+=2; } else { t+=src[i]; i++; } } if(i>=src.length) return null; title=t; i++; while(i<src.length && /[ \t\n]/.test(src[i])) i++; }
+      const q=src[i]; if(q==='"'||q==="'"||q==='('){ const end=q==='('?')':q; const titleStart=++i; while(i<src.length && src[i]!==end) i+=src[i]==='\\'?2:1; if(i>=src.length) return null; title=src.slice(titleStart,i); i++; while(i<src.length && /[ \t\n]/.test(src[i])) i++; }
     }
     if(i>=src.length || src[i]!==')') return null; i++;
     const raw=src.slice(0,i);
