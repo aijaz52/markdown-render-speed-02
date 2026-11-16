@@ -6,6 +6,7 @@ escapeTable[38]='&amp;';escapeTable[60]='&lt;';escapeTable[62]='&gt;';escapeTabl
 const entityPattern=/&(?:#\d{1,7}|#[Xx][a-fA-F0-9]{1,6}|\w+);/y;
 const escapeTest=/[&<>"']/;
 const inlineCodePattern=/^(`+)([^`]|[^`][\s\S]*?[^`])\1(?!`)/;
+const codeSpanNewlinePattern=/\n/g;
 const inlineHtmlPattern=/^<(?! )[^<>]*?>/;
 const unicodePunctuationPattern=/[\p{P}\p{S}]/u;
 const unicodeWhitespacePattern=/\s/u;
@@ -396,6 +397,7 @@ class Lexer {
   }
   tokenText(src){ const m=block.text.exec(src); if(m){ const tok={type:'text',raw:m[0],text:m[0],tokens:[]}; this.inlineQueue.push({src:tok.text,tokens:tok.tokens}); return tok; } }
 
+  // Reuse the newline pattern when normalizing code spans during inline tokenization.
   inlineTokens(src,tokens=[]){
     const original=src;
     const hasEmail=src.includes('@');
@@ -461,7 +463,7 @@ class Lexer {
         }
       }
       // codespan
-      if(ch===96 && (m=inlineCodePattern.exec(src))){ let text=m[2].replace(/\n/g,' '); const ns=/[^ ]/.test(text), sb=text.charCodeAt(0)===32&&text.charCodeAt(text.length-1)===32; if(ns&&sb) text=text.substring(1,text.length-1); tokens.push({type:'codespan',raw:m[0],text}); src=src.slice(m[0].length); continue; }
+      if(ch===96 && (m=inlineCodePattern.exec(src))){ let text=m[2].replace(codeSpanNewlinePattern,' '); const ns=/[^ ]/.test(text), sb=text.charCodeAt(0)===32&&text.charCodeAt(text.length-1)===32; if(ns&&sb) text=text.substring(1,text.length-1); tokens.push({type:'codespan',raw:m[0],text}); src=src.slice(m[0].length); continue; }
       // br
       if((ch===32 || ch===92) && (m=/^( {2,}|\\)\n(?!\s*$)[ \t]*/.exec(src))){ tokens.push({type:'br',raw:m[0]}); src=src.slice(m[0].length); continue; }
       // del
