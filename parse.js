@@ -5,6 +5,10 @@ const escapeTable=[];
 escapeTable[38]='&amp;';escapeTable[60]='&lt;';escapeTable[62]='&gt;';escapeTable[34]='&quot;';escapeTable[39]='&#39;';
 const entityPattern=/&(?:#\d{1,7}|#[Xx][a-fA-F0-9]{1,6}|\w+);/y;
 const escapeTest=/[&<>"']/;
+const inlineCodePattern=/^(`+)([^`]|[^`][\s\S]*?[^`])\1(?!`)/;
+const inlineHtmlPattern=/^<(?! )[^<>]*?>/;
+const unicodePunctuationPattern=/[\p{P}\p{S}]/u;
+const unicodeWhitespacePattern=/\s/u;
 const textBoundary = /[\\<!\[`*_~]|https?:\/\/|ftp:\/\/|www\.|(?:mailto:|xmpp:)?[A-Za-z0-9._+-]+@| {2,}\n/gi;
 const textBoundaryNoEmail = /[\\<!\[`*_~]|https?:\/\/|ftp:\/\/|www\.| {2,}\n/gi;
 const listItemPatterns=Object.create(null);
@@ -14,18 +18,20 @@ function punctuation(c){
   if(!c)return false;
   const n=c.charCodeAt(0);
   if(n<128)return n>=33&&n<=47||n>=58&&n<=64||n>=91&&n<=96||n>=123&&n<=126;
-  return /[\p{P}\p{S}]/u.test(c);
+  return unicodePunctuationPattern.test(c);
 }
 function whitespace(c){
   if(!c)return true;
-  const n=c.charCodeAt(0);return n<128?n===32||n>=9&&n<=13:/\s/u.test(c);
+  const n=c.charCodeAt(0);return n<128?n===32||n>=9&&n<=13:unicodeWhitespacePattern.test(c);
 }
 function emphasisFlags(ch,before,after){
   const beforeSpace=whitespace(before),afterSpace=whitespace(after);
   const beforePunct=punctuation(before),afterPunct=punctuation(after);
   const left=!afterSpace&&(!afterPunct||beforeSpace||beforePunct);
   const right=!beforeSpace&&(!beforePunct||afterSpace||afterPunct);
-  return {open:ch==='_'?left&&(!right||beforePunct):left,close:ch==='_'?right&&(!left||afterPunct):right};
+  const open=ch==='_'?left&&(!right||beforePunct):left;
+  const close=ch==='_'?right&&(!left||afterPunct):right;
+  return (open?1:0)|(close?2:0);
 }
 const listBoundaries=Array.from({length:4},(_,i)=>new RegExp('^ {0,'+i+'}(?:[*+-]|\\d{1,9}[.)])(?=[ \\t]|$)'));
 export function escape(html, encode) {
@@ -67,7 +73,7 @@ function splitCells(row, count) {
 }
 function outputLink(cap, link, raw, lexer) {
   const href = link.href, title = link.title || null;
-  const text = cap[1].replace(/\\([\[\]])/g, '$1');
+  const text = cap[1].includes('\\') ? cap[1].replace(/\\([\[\]])/g, '$1') : cap[1];
   const isImage = cap[0].charAt(0) === '!';
   const inLink = lexer.state.inLink, emitted0 = lexer.state.linkEmitted, inRaw = lexer.state.inRawBlock;
   lexer.state.inLink = true; lexer.state.linkEmitted = false;
@@ -261,11 +267,12 @@ class Lexer {
         if(boundary.test(line)) break;
         if(expanded!==line){lead=0;while(expanded.charCodeAt(lead)===32)lead++;}
         if(lead>=indent){previous=expanded.slice(indent);itemText+='\n'+previous;itemRaw+=seg;rest=rest.slice(seg.length);continue;}
-        if(block.hr.test(rest)) break;
-        if(/^ {0,3}#{1,6}(?:\s|$)/.test(line)) break;
-        if(/^ {0,3}>/.test(line)) break;
-        if(/^ {0,3}(?:`{3,}|~{3,})/.test(line)) break;
-        if(/^ {0,3}<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?:[ \t]+|$|\/?>)/i.test(line)) break;
+        const initial=line.charCodeAt(lead);
+        if((initial===45||initial===95||initial===42)&&block.hr.test(rest)) break;
+        if(initial===35&&/^ {0,3}#{1,6}(?:\s|$)/.test(line)) break;
+        if(initial===62&&/^ {0,3}>/.test(line)) break;
+        if((initial===96||initial===126)&&/^ {0,3}(?:`{3,}|~{3,})/.test(line)) break;
+        if(initial===60&&/^ {0,3}<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?:[ \t]+|$|\/?>)/i.test(line)) break;
         // indented continuation
         let w=0, j=0; while(j<line.length){ if(line[j]==='\t'){w += 4-(w%4); j++;} else if(line[j]===' '){w++; j++;} else break; if(w>=indent) break; }
         if(w>=indent){ itemText += '\n' + expanded.slice(indent); itemRaw += seg; rest = nl===-1?'':rest.slice(nl+1); continue; }
@@ -448,7 +455,7 @@ class Lexer {
         if((m=this.matchEmStrong(src,run,original,masked))){ tokens.push(m); src=src.slice(m.raw.length); continue; }
       }
       // codespan
-      if(ch===96 && (m=/^(`+)([^`]|[^`][\s\S]*?[^`])\1(?!`)/.exec(src))){ let text=m[2].replace(/\n/g,' '); const ns=/[^ ]/.test(text), sb=/^ /.test(text)&&/ $/.test(text); if(ns&&sb) text=text.substring(1,text.length-1); tokens.push({type:'codespan',raw:m[0],text}); src=src.slice(m[0].length); continue; }
+      if(ch===96 && (m=inlineCodePattern.exec(src))){ let text=m[2].replace(/\n/g,' '); const ns=/[^ ]/.test(text), sb=text.charCodeAt(0)===32&&text.charCodeAt(text.length-1)===32; if(ns&&sb) text=text.substring(1,text.length-1); tokens.push({type:'codespan',raw:m[0],text}); src=src.slice(m[0].length); continue; }
       // br
       if((ch===32 || ch===92) && (m=/^( {2,}|\\)\n(?!\s*$)[ \t]*/.exec(src))){ tokens.push({type:'br',raw:m[0]}); src=src.slice(m[0].length); continue; }
       // del
@@ -492,8 +499,8 @@ class Lexer {
     }
     if(i>=src.length || src[i]!==')') return null; i++;
     const raw=src.slice(0,i);
-    href = href.replace(/\\([\p{P}\p{S}])/gu,'$1');
-    if(title!=null) title = title.replace(/\\([\p{P}\p{S}])/gu,'$1');
+    if(href.includes('\\')) href = href.replace(/\\([\p{P}\p{S}])/gu,'$1');
+    if(title!=null && title.includes('\\')) title = title.replace(/\\([\p{P}\p{S}])/gu,'$1');
     const cap=[raw,label,href,title];
     return {cap, link:{href,title}};
   }
@@ -520,23 +527,23 @@ class Lexer {
     const ch=src[0], offset=original.length-src.length;
     let begin=offset;while(begin>0&&original[begin-1]===ch)begin--;
     const before=precedingChar(original,begin), first=emphasisFlags(ch,before,src[count]);
-    if(!first.open) return;
+    if(!(first&1)) return;
     let balance=count, skipped=0;
     for(let i=count;i<src.length;){
       emphasisBoundary.lastIndex=i;
       const next=emphasisBoundary.exec(src);if(!next)break;i=next.index;
       if(masked[offset+i]!==original[offset+i]){i++;continue;}
       if(src[i]==='\\'){i+=2;continue;}
-      if(src[i]==='<'){const html=/^<(?! )[^<>]*?>/.exec(src.slice(i));if(html){i+=html[0].length;continue;}}
+      if(src[i]==='<'){const html=inlineHtmlPattern.exec(src.slice(i));if(html){i+=html[0].length;continue;}}
       if(src[i]==='['||src[i]==='!'){const link=this.matchLink(src.slice(i));if(link){i+=link.cap[0].length;continue;} const ref=this.matchReflink(src.slice(i));if(ref?.link){i+=ref.cap[0].length;continue;}}
       if(ch==='*'&&src[i]==='_'&&src[i+1]==='_'){const close=src.indexOf('__',i+2);if(close!==-1){i=close+2;continue;}}
-      if(src[i]==='`'){const code=/^(`+)([^`]|[^`][\s\S]*?[^`])\1(?!`)/.exec(src.slice(i));if(code){i+=code[0].length;continue;}}
+      if(src[i]==='`'){const code=inlineCodePattern.exec(src.slice(i));if(code){i+=code[0].length;continue;}}
       if(src[i]!==ch){i++;continue;}
       let end=i;while(src[end]===ch)end++;
       const n=end-i, f=emphasisFlags(ch,precedingChar(src,i),src[end]);
-      if(f.open&&!f.close){balance+=n;i=end;continue;}
-      if(f.close){
-        if((first.close||f.open)&&(count+n)%3===0&&(count%3!==0||n%3!==0)){skipped+=n;i=end;continue;}
+      if(f===1){balance+=n;i=end;continue;}
+      if(f&2){
+        if(((first&2)||(f&1))&&(count+n)%3===0&&(count%3!==0||n%3!==0)){skipped+=n;i=end;continue;}
         balance-=n;
         if(balance<=0){const used=Math.min(n,n+balance+skipped), size=Math.min(count,used)%2?1:2; const raw=src.slice(0,i+used),text=raw.slice(size,-size);return {type:size===1?'em':'strong',raw,text,tokens:this.inlineTokens(text,[])};}
       }
